@@ -1,0 +1,9 @@
+Nous avons creer un controller 
+HistoriqueControler, BlogConfiguration, artcileConfiguration, postController, SellBuyController
+un model: Historique
+------------------------- verification des articles expiré--------
+j'ai défini unr fonction helpers
+ensuite le code pour l'actualisation de la base de données se trouve dans le controler <posts<controller et à articleController
+
+
+nb : les modals ne se déclenchent pas après certiaines action.

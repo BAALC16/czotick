@@ -1,0 +1,7 @@
+// mixins loader.scss
+@mixin box-shadow($shadow...) {
+    box-shadow: $shadow;
+}
+@function form-control-height() {
+  @return calc(2.25rem + 27px);
+}
