@@ -29,7 +29,7 @@ class EventController extends Controller
         // Sauvegarder l'ID de l'événement pour le recharger dans le contexte tenant
         $eventId = $currentEvent->id;
 
-        return TenantHelper::withTenantConnection(function() use ($eventId, $currentOrganization, $currentEvent) {
+        return TenantHelper::withTenantConnection(function() use ($eventId, $currentOrganization, $currentEvent, $request) {
             // Utiliser l'événement déjà chargé depuis le middleware, mais recharger les relations
             // via DB direct pour éviter les problèmes de connexion
             try {
@@ -116,6 +116,15 @@ class EventController extends Controller
                 // Récupérer la structure du formulaire dynamique
                 $formStructure = $this->getEventFormStructure($currentEvent->id);
 
+                // Vérifier si un code apporteur d'affaire est présent dans l'URL
+                $referrerCode = $request->query('ref') ?? $request->query('referrer');
+                $referrer = null;
+                if ($referrerCode) {
+                    $referrer = \App\Models\Referrer::where('referrer_code', $referrerCode)
+                        ->where('is_active', true)
+                        ->first();
+                }
+
                 // Enrichir les données de l'événement
                 $currentEvent = $this->enrichEventData($currentEvent);
 
@@ -123,29 +132,29 @@ class EventController extends Controller
                 $partialRegistration = null;
                 $email = $request->query('email');
                 $phone = $request->query('phone');
-                
+
                 if ($email || $phone) {
                     $query = Registration::on('tenant')
                         ->where('event_id', $eventId)
                         ->whereIn('payment_status', ['partial', 'reservation'])
                         ->where('status', '!=', 'cancelled');
-                    
+
                     if ($email) {
                         $query->where(function($q) use ($email) {
                             $q->where('email', $email)
                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.email')) = ?", [$email]);
                         });
                     }
-                    
+
                     if ($phone) {
                         $query->orWhere(function($q) use ($phone) {
                             $q->where('phone', $phone)
                               ->orWhereRaw("JSON_UNQUOTE(JSON_EXTRACT(form_data, '$.phone')) = ?", [$phone]);
                         });
                     }
-                    
+
                     $partialRegistration = $query->first();
-                    
+
                     if ($partialRegistration) {
                         // Calculer le solde restant
                         $balanceDue = max(0, $partialRegistration->ticket_price - $partialRegistration->amount_paid);
@@ -153,7 +162,7 @@ class EventController extends Controller
                     }
                 }
 
-                return view('events.registration-form', compact('currentOrganization', 'currentEvent', 'formStructure', 'partialRegistration'));
+                return view('events.registration-form', compact('currentOrganization', 'currentEvent', 'formStructure', 'partialRegistration', 'referrer', 'referrerCode'));
             } catch (\Exception $e) {
                 Log::error('Erreur lors du chargement des données de l\'événement', [
                     'event_id' => $eventId,
@@ -1948,8 +1957,20 @@ class EventController extends Controller
     /**
      * Finaliser le paiement partiel ou la réservation
      */
-    public function completePartialPayment(Request $request, $registrationId)
+    public function completePartialPayment(Request $request)
     {
+        // Récupérer le registrationId directement depuis la route
+        // Laravel passe les paramètres dans l'ordre de l'URL, donc on doit les récupérer depuis la route
+        $registrationId = $request->route('registrationId');
+
+        // Log pour déboguer
+        Log::info('Paramètres reçus dans completePartialPayment', [
+            'registrationId_from_route' => $registrationId,
+            'route_params' => $request->route()->parameters(),
+            'path' => $request->path(),
+            'url' => $request->url()
+        ]);
+
         $currentOrganization = TenantHelper::getCurrentOrganization();
         $currentEvent = TenantHelper::getCurrentEvent();
 
@@ -1957,19 +1978,81 @@ class EventController extends Controller
             abort(500, 'Contexte d\'organisation ou d\'événement manquant');
         }
 
+        // Valider que registrationId est un nombre
+        if (!is_numeric($registrationId)) {
+            Log::error('registrationId invalide', [
+                'registrationId' => $registrationId,
+                'type' => gettype($registrationId)
+            ]);
+            return redirect()->route('event.registration', [
+                'org_slug' => $currentOrganization->org_key,
+                'event_slug' => $currentEvent->event_slug
+            ])->withErrors(['error' => 'ID d\'inscription invalide']);
+        }
+
         return TenantHelper::withTenantConnection(function() use ($request, $registrationId, $currentOrganization, $currentEvent) {
-            $registration = Registration::on('tenant')
-                ->where('id', $registrationId)
-                ->where('event_id', $currentEvent->id)
-                ->whereIn('payment_status', ['partial', 'reservation'])
-                ->where('status', '!=', 'cancelled')
-                ->first();
+            // Log pour déboguer
+            Log::info('Recherche inscription pour finalisation', [
+                'registration_id' => $registrationId,
+                'event_id' => $currentEvent->id,
+                'org_key' => $currentOrganization->org_key,
+                'event_slug' => $currentEvent->event_slug
+            ]);
+
+            // Le modèle Registration utilise déjà la connexion 'tenant' par défaut
+            // D'abord, chercher l'inscription par ID
+            $registration = Registration::where('id', $registrationId)->first();
 
             if (!$registration) {
+                Log::warning('Inscription non trouvée', [
+                    'registration_id' => $registrationId,
+                    'event_id' => $currentEvent->id
+                ]);
+
                 return redirect()->route('event.registration', [
                     'org_slug' => $currentOrganization->org_key,
                     'event_slug' => $currentEvent->event_slug
-                ])->withErrors(['error' => 'Inscription non trouvée ou déjà complétée']);
+                ])->withErrors(['error' => 'Inscription non trouvée']);
+            }
+
+            // Vérifier que l'inscription appartient bien à l'événement courant
+            if ($registration->event_id != $currentEvent->id) {
+                Log::warning('Inscription appartient à un autre événement', [
+                    'registration_id' => $registrationId,
+                    'registration_event_id' => $registration->event_id,
+                    'current_event_id' => $currentEvent->id
+                ]);
+
+                return redirect()->route('event.registration', [
+                    'org_slug' => $currentOrganization->org_key,
+                    'event_slug' => $currentEvent->event_slug
+                ])->withErrors(['error' => 'Cette inscription n\'appartient pas à cet événement']);
+            }
+
+            // Vérifier le statut de paiement
+            if (!in_array($registration->payment_status, ['partial', 'reservation'])) {
+                Log::warning('Inscription avec statut de paiement invalide', [
+                    'registration_id' => $registrationId,
+                    'payment_status' => $registration->payment_status
+                ]);
+
+                return redirect()->route('event.registration', [
+                    'org_slug' => $currentOrganization->org_key,
+                    'event_slug' => $currentEvent->event_slug
+                ])->withErrors(['error' => 'Cette inscription n\'a pas de paiement partiel à finaliser']);
+            }
+
+            // Vérifier que l'inscription n'est pas annulée
+            if ($registration->status == 'cancelled') {
+                Log::warning('Inscription annulée', [
+                    'registration_id' => $registrationId,
+                    'status' => $registration->status
+                ]);
+
+                return redirect()->route('event.registration', [
+                    'org_slug' => $currentOrganization->org_key,
+                    'event_slug' => $currentEvent->event_slug
+                ])->withErrors(['error' => 'Cette inscription a été annulée']);
             }
 
             // Calculer le solde restant
@@ -2008,11 +2091,15 @@ class EventController extends Controller
                 'ticket_price' => $registration->ticket_price
             ]);
 
+            // Récupérer le code apporteur depuis la requête si présent
+            $referrerCode = $request->query('ref') ?? $request->query('referrer');
+
             // Rediriger vers la page de validation du paiement avec les données
             return view('public.validation_form', compact(
                 'paymentData',
                 'currentOrganization',
-                'currentEvent'
+                'currentEvent',
+                'referrerCode'
             ));
         });
     }

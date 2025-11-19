@@ -1,0 +1,125 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+env:
+  PHP_VERSION: '8.1'
+
+jobs:
+  deploy:
+    name: Deploy to Production VPS
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.7.0
+        with:
+          ssh-private-key: ${{ secrets.VPS_SSH_PRIVATE_KEY }}
+
+      - name: Add VPS to known hosts
+        run: |
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to VPS
+        run: |
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} << 'EOF'
+            set -e
+            
+            # Variables
+            APP_DIR="${{ secrets.APP_DIRECTORY }}"
+            REPO_URL="https://github.com/${{ github.repository }}.git"
+            BRANCH="${{ github.ref_name }}"
+            
+            echo "🚀 Démarrage du déploiement..."
+            
+            # Créer le répertoire si nécessaire
+            mkdir -p $APP_DIR
+            cd $APP_DIR
+            
+            # Cloner ou mettre à jour le repository
+            if [ -d ".git" ]; then
+              echo "📥 Mise à jour du code..."
+              git fetch origin
+              git reset --hard origin/$BRANCH
+              git clean -fd
+            else
+              echo "📥 Clonage du repository..."
+              git clone -b $BRANCH $REPO_URL .
+            fi
+            
+            # Copier le fichier .env si nécessaire
+            if [ ! -f ".env" ]; then
+              echo "📝 Création du fichier .env..."
+              cp .env.example .env
+            fi
+            
+            # Arrêter les conteneurs existants
+            echo "🛑 Arrêt des conteneurs..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml down || true
+            
+            # Construire les nouvelles images
+            echo "🔨 Construction des images..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml build --no-cache
+            
+            # Démarrer les conteneurs
+            echo "▶️  Démarrage des conteneurs..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+            
+            # Attendre que les services soient prêts
+            echo "⏳ Attente du démarrage des services..."
+            sleep 10
+            
+            # Installer les dépendances Composer
+            echo "📦 Installation des dépendances Composer..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app composer install --no-dev --optimize-autoloader --no-interaction || true
+            
+            # Installer les dépendances NPM
+            echo "📦 Installation des dépendances NPM..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app npm ci --production || true
+            
+            # Compiler les assets
+            echo "🎨 Compilation des assets..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app npm run build || true
+            
+            # Exécuter les migrations
+            echo "🗄️  Exécution des migrations..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app php artisan migrate --force || true
+            
+            # Optimiser l'application
+            echo "⚡ Optimisation de l'application..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app php artisan config:cache || true
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app php artisan route:cache || true
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app php artisan view:cache || true
+            
+            # Créer le lien symbolique pour le storage
+            echo "🔗 Création du lien symbolique..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml exec -T app php artisan storage:link || true
+            
+            # Redémarrer les conteneurs pour appliquer les changements
+            echo "🔄 Redémarrage des conteneurs..."
+            docker-compose -f docker-compose.yml -f docker-compose.prod.yml restart
+            
+            # Nettoyer les images inutilisées
+            echo "🧹 Nettoyage..."
+            docker system prune -f
+            
+            echo "✅ Déploiement terminé avec succès!"
+          EOF
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "✅ Déploiement réussi!"
+          else
+            echo "❌ Échec du déploiement"
+          fi
+

@@ -337,6 +337,22 @@ Route::prefix('org/{org_slug}')->where(['org_slug' => '[a-z0-9\-]+'])->name('org
             // Route::post('/{registration}/cancel', [App\Http\Controllers\Organization\RegistrationController::class, 'cancel'])->name('cancel');
             // Route::post('/{registration}/resend-ticket', [App\Http\Controllers\Organization\RegistrationController::class, 'resendTicket'])->name('resend-ticket');
         });
+
+        // Routes pour la gestion des collaborateurs
+        Route::prefix('collaborateurs')->name('collaborateurs.')->group(function () {
+            Route::get('/', [App\Http\Controllers\Organization\ReferrerController::class, 'index'])->name('index');
+            Route::get('/create', [App\Http\Controllers\Organization\ReferrerController::class, 'create'])->name('create');
+            Route::post('/', [App\Http\Controllers\Organization\ReferrerController::class, 'store'])->name('store');
+            Route::get('/events/{eventId}/assign-commission', [App\Http\Controllers\Organization\ReferrerController::class, 'assignCommission'])->name('assign-commission')->where(['eventId' => '[0-9]+']);
+            Route::post('/events/{eventId}/store-commission', [App\Http\Controllers\Organization\ReferrerController::class, 'storeCommission'])->name('store-commission')->where(['eventId' => '[0-9]+']);
+            // Routes spécifiques AVANT les routes génériques (ordre important pour Laravel)
+            Route::get('/{id}/edit', [App\Http\Controllers\Organization\ReferrerController::class, 'edit'])->name('edit')->where(['id' => '[0-9]+']);
+            Route::post('/{id}/toggle-status', [App\Http\Controllers\Organization\ReferrerController::class, 'toggleStatus'])->name('toggle-status')->where(['id' => '[0-9]+']);
+            // Routes génériques en dernier (doivent être après les routes spécifiques)
+            Route::put('/{id}', [App\Http\Controllers\Organization\ReferrerController::class, 'update'])->name('update')->where(['id' => '[0-9]+']);
+            Route::delete('/{id}', [App\Http\Controllers\Organization\ReferrerController::class, 'destroy'])->name('destroy')->where(['id' => '[0-9]+']);
+            Route::get('/{id}', [App\Http\Controllers\Organization\ReferrerController::class, 'show'])->name('show')->where(['id' => '[0-9]+']);
+        });
         // Routes verifiers - commentées temporairement (contrôleur manquant)
         // Route::prefix('verifiers')->name('verifiers.')->group(function () {
         //     Route::get('/', [App\Http\Controllers\Organization\VerifierController::class, 'index'])->name('index');
@@ -373,6 +389,8 @@ Route::post('/api/webhook/handle-transaction', [PaymentController::class, 'handl
 
 Route::middleware(['tenant.resolve'])->group(function () {
 
+    // Route pour le dashboard apporteur d'affaire
+
     Route::get('/{org_slug}', [OrganizationController::class, 'showEvents'])
          ->name('org.events')
          ->where(['org_slug' => '[a-z0-9\-]+']);
@@ -396,7 +414,9 @@ Route::middleware(['tenant.resolve'])->group(function () {
         Route::get('/', [EventController::class, 'showRegistrationForm'])->name('registration');
         Route::post('/', [EventController::class, 'storeRegistration'])->name('registration.store');
         Route::get('/check-status/{email}', [EventController::class, 'checkRegistrationStatus'])->name('registration.check');
-        Route::get('/complete-payment/{registrationId}', [EventController::class, 'completePartialPayment'])->name('registration.complete-payment');
+        Route::get('/finaliser-paiement/{registrationId}', [EventController::class, 'completePartialPayment'])
+            ->name('registration.complete-payment')
+            ->where('registrationId', '[0-9]+');
         Route::get('/verify-zone/{ticket_hash}', [VerifierController::class, 'verifyZoneTicket'])
              ->name('verify-zone')
              ->where('ticket_hash', '[a-f0-9]{64}|[a-f0-9]{32}');

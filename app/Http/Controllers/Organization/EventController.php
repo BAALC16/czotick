@@ -46,8 +46,33 @@ class EventController extends Controller
                     ->withErrors(['organization' => 'Organisation non trouvée.']);
             }
 
+            // Détecter le rôle de l'utilisateur
+            $userRole = $user['role'] ?? 'user';
+
+            // Vérifier si l'utilisateur est un collaborateur
+            $referrer = null;
+            if (in_array($userRole, ['referrer', 'user', 'admin', 'organizer'])) {
+                $referrer = DB::connection('tenant')
+                    ->table('referrers')
+                    ->where('user_id', $user['id'])
+                    ->where('is_active', true)
+                    ->first();
+                if ($referrer) {
+                    $userRole = 'referrer';
+                }
+            }
+
             // Récupérer les événements avec filtres (sans pagination pour la vue initiale)
             $query = DB::connection('tenant')->table('events');
+
+            // Filtrer selon le rôle
+            if ($userRole === 'referrer' && $referrer) {
+                $eventIds = DB::connection('tenant')
+                    ->table('referrer_commissions')
+                    ->where('referrer_id', $referrer->id)
+                    ->pluck('event_id');
+                $query->whereIn('id', $eventIds);
+            }
 
             // Filtre par statut de publication
             $status = $request->get('status');
@@ -166,6 +191,13 @@ class EventController extends Controller
 
         if (!$user) {
             return redirect()->route('org.login', ['org_slug' => $orgSlug]);
+        }
+
+        // Vérifier les permissions : seulement admin, owner, organizer
+        $userRole = $user['role'] ?? 'user';
+        if (!in_array($userRole, ['admin', 'owner', 'organizer'])) {
+            return redirect()->route('org.dashboard', ['org_slug' => $orgSlug])
+                ->with('error', 'Vous n\'avez pas les permissions pour créer un événement.');
         }
 
         try {
@@ -350,6 +382,13 @@ class EventController extends Controller
         if (!$user) {
             Log::warning('Tentative de création sans authentification', ['org_slug' => $orgSlug]);
             return redirect()->route('org.login', ['org_slug' => $orgSlug]);
+        }
+
+        // Vérifier les permissions
+        $userRole = $user['role'] ?? 'user';
+        if (!in_array($userRole, ['admin', 'owner', 'organizer'])) {
+            return redirect()->route('org.dashboard', ['org_slug' => $orgSlug])
+                ->with('error', 'Vous n\'avez pas les permissions pour créer un événement.');
         }
 
         try {
@@ -685,7 +724,7 @@ class EventController extends Controller
             } elseif ($request->pack_type === 'premium') {
                 // Récupérer les éléments sélectionnés
                 $premiumElements = $request->input('premium_elements', []);
-                
+
                 // S'assurer que qr_code et ticket_id sont toujours présents (obligatoires)
                 if (!in_array('qr_code', $premiumElements)) {
                     $premiumElements[] = 'qr_code';
@@ -693,7 +732,7 @@ class EventController extends Controller
                 if (!in_array('ticket_id', $premiumElements)) {
                     $premiumElements[] = 'ticket_id';
                 }
-                
+
                 $ticketCustomization = [
                     'pack_type' => 'premium',
                     'template_path' => $ticketTemplatePath,
@@ -776,6 +815,9 @@ class EventController extends Controller
             Log::info('Insertion dans la base de données tenant');
 
             $eventId = DB::connection('tenant')->table('events')->insertGetId($data);
+
+            // Notifier les collaborateurs de la création de l'événement
+            $this->notifyReferrersOfNewEvent($eventId, $organization->id, $eventSlug);
 
             // Créer les tarifs multiples si activé
             if ($request->has('use_multiple_tickets') && $request->use_multiple_tickets && $request->has('tickets')) {
@@ -1029,6 +1071,17 @@ class EventController extends Controller
     {
         $user = session('organization_user');
 
+        if (!$user) {
+            return redirect()->route('org.login', ['org_slug' => $orgSlug]);
+        }
+
+        // Vérifier les permissions
+        $userRole = $user['role'] ?? 'user';
+        if (!in_array($userRole, ['admin', 'owner', 'organizer'])) {
+            return redirect()->route('org.dashboard', ['org_slug' => $orgSlug])
+                ->with('error', 'Vous n\'avez pas les permissions pour modifier un événement.');
+        }
+
         Log::info('=== EDIT EVENT ===', [
             'event_id' => $event,
             'org_slug' => $orgSlug,
@@ -1133,6 +1186,13 @@ class EventController extends Controller
 
         if (!$user) {
             return redirect()->route('org.login', ['org_slug' => $orgSlug]);
+        }
+
+        // Vérifier les permissions
+        $userRole = $user['role'] ?? 'user';
+        if (!in_array($userRole, ['admin', 'owner', 'organizer'])) {
+            return redirect()->route('org.dashboard', ['org_slug' => $orgSlug])
+                ->with('error', 'Vous n\'avez pas les permissions pour modifier un événement.');
         }
 
         try {
@@ -1371,23 +1431,23 @@ class EventController extends Controller
                 } elseif ($packType === 'premium') {
                     // Récupérer les éléments sélectionnés
                     $premiumElements = $request->input('premium_elements', []);
-                    
+
                     // Si aucun élément n'est fourni, utiliser les éléments existants ou par défaut
                     if (empty($premiumElements) && isset($existingTicketCustomization['elements'])) {
                         $premiumElements = $existingTicketCustomization['elements'];
                     }
-                    
+
                     // S'assurer que ticket_id est toujours présent (obligatoire)
                     if (!in_array('ticket_id', $premiumElements)) {
                         $premiumElements[] = 'ticket_id';
                     }
-                    
+
                     $ticketCustomization = [
                         'pack_type' => 'premium',
                         'template_path' => $ticketTemplatePath ?? $existingTicketCustomization['template_path'] ?? null,
                         'elements' => $premiumElements, // QR Code, Ticket ID, Seat, Ticket Type, Amount
                     ];
-                    
+
                     \Log::info('💾 Valeurs premium sauvegardées dans update:', [
                         'elements' => $ticketCustomization['elements'],
                     ]);
@@ -1607,6 +1667,13 @@ class EventController extends Controller
             return redirect()->route('org.login', ['org_slug' => $orgSlug]);
         }
 
+        // Vérifier les permissions
+        $userRole = $user['role'] ?? 'user';
+        if (!in_array($userRole, ['admin', 'owner', 'organizer'])) {
+            return redirect()->route('org.dashboard', ['org_slug' => $orgSlug])
+                ->with('error', 'Vous n\'avez pas les permissions pour supprimer un événement.');
+        }
+
         try {
             // Vérifier que l'événement existe
             $eventData = DB::connection('tenant')
@@ -1678,6 +1745,63 @@ class EventController extends Controller
 
             return redirect()->route('org.events.index', ['org_slug' => $orgSlug])
                 ->with('error', 'Erreur lors de la suppression de l\'événement.');
+        }
+    }
+
+    /**
+     * Notifier les collaborateurs de la création d'un nouvel événement
+     */
+    private function notifyReferrersOfNewEvent($eventId, $organizationId, $eventSlug)
+    {
+        try {
+            $referrers = \App\Models\Referrer::where('organization_id', $organizationId)
+                ->where('is_active', true)
+                ->get();
+
+            $event = DB::connection('tenant')
+                ->table('events')
+                ->where('id', $eventId)
+                ->first();
+
+            if (!$event) {
+                return;
+            }
+
+            $orgKey = DB::connection('saas_master')
+                ->table('organizations')
+                ->where('id', $organizationId)
+                ->value('org_key');
+
+            foreach ($referrers as $referrer) {
+                // Créer l'URL avec le code collaborateur
+                $eventUrl = url("/{$orgKey}/{$eventSlug}?ref={$referrer->referrer_code}");
+
+                \App\Models\Notification::createForReferrer(
+                    $referrer->id,
+                    'event_created',
+                    'Nouvel événement créé',
+                    "Un nouvel événement '{$event->event_title}' a été créé. Partagez-le avec vos clients !",
+                    [
+                        'event_id' => $eventId,
+                        'event_title' => $event->event_title,
+                        'event_date' => $event->event_date,
+                        'event_url' => $eventUrl,
+                        'referrer_code' => $referrer->referrer_code
+                    ]
+                );
+            }
+
+            Log::info('Collaborateurs notifiés de la création de l\'événement', [
+                'event_id' => $eventId,
+                'referrers_count' => $referrers->count()
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur lors de la notification des collaborateurs', [
+                'event_id' => $eventId,
+                'error' => $e->getMessage()
+            ]);
+            // Ne pas bloquer la création de l'événement en cas d'erreur
         }
     }
 }

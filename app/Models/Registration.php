@@ -68,6 +68,11 @@ class Registration extends Model
         return $this->hasMany(PaymentTransaction::class);
     }
 
+    public function referrerRegistration()
+    {
+        return $this->hasOne(ReferrerRegistration::class);
+    }
+
     // Scopes
     public function scopeConfirmed($query)
     {

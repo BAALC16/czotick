@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>@yield('title', 'Dashboard') - {{ $organization->org_name ?? 'Organisation' }}</title>
+    
+    @php
+        use Illuminate\Support\Facades\DB;
+        $user = session('organization_user');
+        $userRole = $user['role'] ?? 'user';
+    @endphp
 
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -205,6 +211,29 @@
 
         <nav>
             <ul class="sidebar-menu">
+                @php
+                    $user = session('organization_user');
+                    $userRole = $user['role'] ?? 'user';
+                    
+                    // Vérifier si l'utilisateur est un apporteur d'affaire
+                    $isReferrer = false;
+                    if (in_array($userRole, ['referrer', 'user', 'admin', 'organizer'])) {
+                        try {
+                            $referrer = DB::connection('tenant')
+                                ->table('referrers')
+                                ->where('user_id', $user['id'])
+                                ->where('is_active', true)
+                                ->first();
+                            if ($referrer) {
+                                $isReferrer = true;
+                                $userRole = 'referrer';
+                            }
+                        } catch (\Exception $e) {
+                            // Ignorer l'erreur
+                        }
+                    }
+                @endphp
+
                 <li class="sidebar-menu-item">
                     <a href="{{ route('org.dashboard', ['org_slug' => $orgSlug]) }}"
                        class="sidebar-menu-link {{ request()->routeIs('org.dashboard') ? 'active' : '' }}">
@@ -212,27 +241,50 @@
                         <span>Dashboard</span>
                     </a>
                 </li>
-                <li class="sidebar-menu-item">
-                    <a href="{{ route('org.events.index', ['org_slug' => $orgSlug]) }}"
-                       class="sidebar-menu-link {{ request()->routeIs('org.events.*') && !request()->routeIs('org.events.create') ? 'active' : '' }}">
-                        <i class="fas fa-list"></i>
-                        <span>Liste des événements</span>
-                    </a>
-                </li>
-                <li class="sidebar-menu-item">
-                    <a href="{{ route('org.events.create', ['org_slug' => $orgSlug]) }}"
-                       class="sidebar-menu-link {{ request()->routeIs('org.events.create') ? 'active' : '' }}">
-                        <i class="fas fa-plus-circle"></i>
-                        <span>Créer un événement</span>
-                    </a>
-                </li>
-                <li class="sidebar-menu-item">
-                    <a href="{{ route('org.accounts.index', ['org_slug' => $orgSlug]) }}"
-                       class="sidebar-menu-link {{ request()->routeIs('org.accounts.*') ? 'active' : '' }}">
-                        <i class="fas fa-users"></i>
-                        <span>Comptes</span>
-                    </a>
-                </li>
+
+                @if($userRole === 'admin' || $userRole === 'owner' || $userRole === 'organizer')
+                    <!-- Menus pour admin/organisateur -->
+                    <li class="sidebar-menu-item">
+                        <a href="{{ route('org.events.index', ['org_slug' => $orgSlug]) }}"
+                           class="sidebar-menu-link {{ request()->routeIs('org.events.*') && !request()->routeIs('org.events.create') ? 'active' : '' }}">
+                            <i class="fas fa-list"></i>
+                            <span>Liste des événements</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-menu-item">
+                        <a href="{{ route('org.events.create', ['org_slug' => $orgSlug]) }}"
+                           class="sidebar-menu-link {{ request()->routeIs('org.events.create') ? 'active' : '' }}">
+                            <i class="fas fa-plus-circle"></i>
+                            <span>Créer un événement</span>
+                        </a>
+                    </li>
+                    <li class="sidebar-menu-item">
+                        <a href="{{ route('org.collaborateurs.index', ['org_slug' => $orgSlug]) }}"
+                           class="sidebar-menu-link {{ request()->routeIs('org.collaborateurs.*') ? 'active' : '' }}">
+                            <i class="fas fa-handshake"></i>
+                            <span>Collaborateurs</span>
+                        </a>
+                    </li>
+                    @if($userRole === 'admin' || $userRole === 'owner')
+                        <li class="sidebar-menu-item">
+                            <a href="{{ route('org.accounts.index', ['org_slug' => $orgSlug]) }}"
+                               class="sidebar-menu-link {{ request()->routeIs('org.accounts.*') ? 'active' : '' }}">
+                                <i class="fas fa-users"></i>
+                                <span>Comptes</span>
+                            </a>
+                        </li>
+                    @endif
+                @elseif($userRole === 'referrer')
+                    <!-- Menus pour apporteur d'affaire -->
+                    <li class="sidebar-menu-item">
+                        <a href="{{ route('org.events.index', ['org_slug' => $orgSlug]) }}"
+                           class="sidebar-menu-link {{ request()->routeIs('org.events.*') ? 'active' : '' }}">
+                            <i class="fas fa-calendar"></i>
+                            <span>Mes événements</span>
+                        </a>
+                    </li>
+                @endif
+
                 <li class="sidebar-menu-item">
                     <a href="{{ route('org.profile', ['org_slug' => $orgSlug]) }}"
                        class="sidebar-menu-link {{ request()->routeIs('org.profile') ? 'active' : '' }}">

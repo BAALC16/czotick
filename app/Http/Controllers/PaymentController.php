@@ -471,7 +471,8 @@ class PaymentController extends Controller
                         'phone_number' => $validatedData['phone_number'],
                         'otp_code' => $validatedData['otp_code'],
                         'registration_id' => $validatedData['registration_id'] ?? null,
-                        'is_partial_completion' => isset($validatedData['is_partial_completion']) && $validatedData['is_partial_completion']
+                        'is_partial_completion' => isset($validatedData['is_partial_completion']) && $validatedData['is_partial_completion'],
+                        'referrer_code' => $validatedData['referrer_code'] ?? null
                     ],
                     'event_data' => [
                         'event_id' => $currentEvent->id,
@@ -1214,7 +1215,8 @@ public function mtnMoneyProcess(Request $request): JsonResponse
                     // Données ticket
                     'ticket_type_id' => $validatedData['ticket_type_id'],
                     'ticket_name' => $validatedData['ticket_name'],
-                    'phone_number' => $validatedData['phone_number']
+                    'phone_number' => $validatedData['phone_number'],
+                    'referrer_code' => $validatedData['referrer_code'] ?? null
                 ],
                 'event_data' => [
                     'event_id' => $currentEvent->id,
@@ -1670,7 +1672,8 @@ public function moovMoneyProcess(Request $request): JsonResponse
                     // Données ticket
                     'ticket_type_id' => $validatedData['ticket_type_id'],
                     'ticket_name' => $validatedData['ticket_name'],
-                    'phone_number' => $validatedData['phone_number']
+                    'phone_number' => $validatedData['phone_number'],
+                    'referrer_code' => $validatedData['referrer_code'] ?? null
                 ],
                 'event_data' => [
                     'event_id' => $currentEvent->id,
@@ -6566,11 +6569,35 @@ private function createRegistrationFromTransaction($transactionId, $status = 'co
                             'error' => $e->getMessage()
                         ]);
                     }
+                } else {
+                    // Si toujours partiel, envoyer un email avec le lien de finalisation
+                    try {
+                        $this->sendPartialPaymentEmail($existingRegistrationId);
+                    } catch (\Exception $e) {
+                        Log::warning('Erreur envoi email paiement partiel (ne bloque pas la mise à jour)', [
+                            'registration_id' => $existingRegistrationId,
+                            'error' => $e->getMessage()
+                        ]);
+                    }
                 }
 
                 return $existingRegistrationId;
             }
         }
+
+        // Récupérer le prix réel du ticket depuis le ticket_type
+        $ticketType = DB::connection('tenant')
+            ->table('ticket_types')
+            ->where('id', $participantData['ticket_type_id'])
+            ->first();
+
+        $realTicketPrice = $ticketType ? $ticketType->price : $transaction->amount;
+        
+        // Déterminer si c'est un paiement partiel
+        $isPartialPayment = $transaction->amount < $realTicketPrice;
+        $paymentStatus = $isPartialPayment ? 'partial' : 'paid';
+        $registrationStatus = $isPartialPayment ? 'pending' : 'confirmed';
+        $confirmationDate = $isPartialPayment ? null : now();
 
         // Générer un numéro d'inscription unique
         $registrationNumber = $this->generateRegistrationNumber();
@@ -6587,20 +6614,27 @@ private function createRegistrationFromTransaction($transactionId, $status = 'co
                 'phone' => $participantData['phone'],
                 'organization' => $participantData['organization'],
                 'position' => $participantData['position'],
-                'registration_status' => 'confirmed',
-                'payment_status' => 'paid',
+                'registration_status' => $registrationStatus,
+                'payment_status' => $paymentStatus,
                 'amount_paid' => $transaction->amount,
                 'currency' => $transaction->currency,
-                'ticket_price' => $transaction->amount,
-                'status' => 'confirmed',
-                'confirmation_date' => now(),
+                'ticket_price' => $realTicketPrice, // Utiliser le prix réel du ticket
+                'status' => $registrationStatus,
+                'confirmation_date' => $confirmationDate,
                 'form_data' => json_encode([
                     'payment_method' => $transaction->payment_provider,
-                    'transaction_reference' => $transaction->transaction_reference
+                    'transaction_reference' => $transaction->transaction_reference,
+                    'referrer_code' => $participantData['referrer_code'] ?? null
                 ]),
                 'created_at' => now(),
                 'updated_at' => now()
             ]);
+
+        // Si un apporteur d'affaire est associé, créer la relation et calculer la commission
+        $referrerCode = $participantData['referrer_code'] ?? null;
+        if ($referrerCode && $paymentStatus === 'paid') {
+            $this->linkRegistrationToReferrer($registrationId, $eventData['event_id'], $referrerCode, $realTicketPrice);
+        }
 
         // Mettre à jour la transaction avec l'ID d'inscription
         DB::connection('tenant')
@@ -6622,17 +6656,31 @@ private function createRegistrationFromTransaction($transactionId, $status = 'co
             'transaction_id' => $transactionId,
             'registration_id' => $registrationId,
             'registration_number' => $registrationNumber,
-            'participant' => $participantData['fullname']
+            'participant' => $participantData['fullname'],
+            'payment_status' => $paymentStatus,
+            'is_partial' => $isPartialPayment
         ]);
 
-        // Tenter de générer et envoyer le ticket
-        try {
-            $this->generateAndSendTicketForRegistration($registrationId);
-        } catch (\Exception $e) {
-            Log::warning('Erreur génération ticket (ne bloque pas la création)', [
-                'registration_id' => $registrationId,
-                'error' => $e->getMessage()
-            ]);
+        // Si paiement partiel, envoyer l'email de finalisation
+        if ($isPartialPayment) {
+            try {
+                $this->sendPartialPaymentEmail($registrationId);
+            } catch (\Exception $e) {
+                Log::warning('Erreur envoi email paiement partiel (ne bloque pas la création)', [
+                    'registration_id' => $registrationId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+        } else {
+            // Si paiement complet, générer et envoyer le ticket
+            try {
+                $this->generateAndSendTicketForRegistration($registrationId);
+            } catch (\Exception $e) {
+                Log::warning('Erreur génération ticket (ne bloque pas la création)', [
+                    'registration_id' => $registrationId,
+                    'error' => $e->getMessage()
+                ]);
+            }
         }
 
         return $registrationId;
@@ -6646,6 +6694,204 @@ private function createRegistrationFromTransaction($transactionId, $status = 'co
         throw $e;
     }
 }
+
+    /**
+     * Lier une inscription à un apporteur d'affaire et calculer la commission
+     */
+    private function linkRegistrationToReferrer($registrationId, $eventId, $referrerCode, $registrationAmount)
+    {
+        try {
+            $referrer = \App\Models\Referrer::where('referrer_code', $referrerCode)
+                ->where('is_active', true)
+                ->first();
+
+            if (!$referrer) {
+                Log::warning('Apporteur d\'affaire non trouvé pour le code', [
+                    'referrer_code' => $referrerCode,
+                    'registration_id' => $registrationId
+                ]);
+                return;
+            }
+
+            // Récupérer la commission configurée pour cet événement et cet apporteur
+            $commission = \App\Models\ReferrerCommission::where('event_id', $eventId)
+                ->where('referrer_id', $referrer->id)
+                ->first();
+
+            if (!$commission) {
+                Log::warning('Aucune commission configurée pour cet apporteur et cet événement', [
+                    'referrer_id' => $referrer->id,
+                    'event_id' => $eventId,
+                    'registration_id' => $registrationId
+                ]);
+                return;
+            }
+
+            // Calculer le montant de la commission
+            $commissionAmount = $commission->calculateCommission($registrationAmount);
+
+            // Créer la relation referrer_registration
+            \App\Models\ReferrerRegistration::create([
+                'registration_id' => $registrationId,
+                'referrer_id' => $referrer->id,
+                'event_id' => $eventId,
+                'registration_amount' => $registrationAmount,
+                'commission_amount' => $commissionAmount,
+                'commission_status' => 'pending', // À payer plus tard
+            ]);
+
+            // Créer une notification pour l'apporteur
+            \App\Models\Notification::createForReferrer(
+                $referrer->id,
+                'registration_received',
+                'Nouvelle inscription reçue',
+                "Une nouvelle inscription a été effectuée pour l'événement. Commission: " . number_format($commissionAmount, 0, ',', ' ') . " FCFA",
+                [
+                    'registration_id' => $registrationId,
+                    'event_id' => $eventId,
+                    'commission_amount' => $commissionAmount
+                ]
+            );
+
+            // Créer une notification pour l'organisateur
+            $event = \App\Models\Event::find($eventId);
+            if ($event) {
+                $organizerUsers = DB::connection('tenant')
+                    ->table('users')
+                    ->whereIn('role', ['owner', 'organizer', 'admin'])
+                    ->get();
+
+                foreach ($organizerUsers as $organizer) {
+                    \App\Models\Notification::createForUser(
+                        $organizer->id,
+                        'referrer_registration',
+                        'Inscription via apporteur d\'affaire',
+                        "Une inscription a été effectuée via l'apporteur d'affaire {$referrer->name}",
+                        [
+                            'registration_id' => $registrationId,
+                            'event_id' => $eventId,
+                            'referrer_id' => $referrer->id,
+                            'referrer_name' => $referrer->name
+                        ]
+                    );
+                }
+            }
+
+            Log::info('Inscription liée à l\'apporteur d\'affaire', [
+                'registration_id' => $registrationId,
+                'referrer_id' => $referrer->id,
+                'commission_amount' => $commissionAmount
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur lors de la liaison de l\'inscription à l\'apporteur', [
+                'registration_id' => $registrationId,
+                'referrer_code' => $referrerCode,
+                'error' => $e->getMessage()
+            ]);
+            // Ne pas bloquer la création de l'inscription en cas d'erreur
+        }
+    }
+
+    /**
+     * Envoyer un email de paiement partiel avec le lien de finalisation
+     */
+    private function sendPartialPaymentEmail($registrationId)
+    {
+        try {
+            $registration = DB::connection('tenant')
+                ->table('registrations')
+                ->where('id', $registrationId)
+                ->first();
+
+            if (!$registration || !$registration->email) {
+                Log::warning('Impossible d\'envoyer l\'email de paiement partiel: inscription non trouvée ou email manquant', [
+                    'registration_id' => $registrationId
+                ]);
+                return;
+            }
+
+            $currentOrganization = TenantHelper::getCurrentOrganization();
+            $currentEvent = TenantHelper::getCurrentEvent();
+
+            if (!$currentOrganization || !$currentEvent) {
+                // Récupérer l'événement depuis la base de données
+                $event = DB::connection('tenant')
+                    ->table('events')
+                    ->where('id', $registration->event_id)
+                    ->first();
+
+                if (!$event) {
+                    Log::warning('Impossible d\'envoyer l\'email de paiement partiel: événement non trouvé', [
+                        'registration_id' => $registrationId,
+                        'event_id' => $registration->event_id
+                    ]);
+                    return;
+                }
+
+                // Récupérer l'organisation depuis le contexte ou la base
+                $organization = DB::connection('tenant')
+                    ->table('organizations')
+                    ->where('id', $event->organization_id ?? 1)
+                    ->first();
+
+                if (!$organization) {
+                    Log::warning('Impossible d\'envoyer l\'email de paiement partiel: organisation non trouvée');
+                    return;
+                }
+
+                $currentEvent = (object) $event;
+                $currentOrganization = (object) $organization;
+            }
+
+            // Calculer le solde restant
+            $balanceDue = max(0, $registration->ticket_price - $registration->amount_paid);
+            
+            // Lien direct de finalisation du paiement
+            $completionUrl = route('event.registration.complete-payment', [
+                'org_slug' => $currentOrganization->org_key ?? 'jci-abidjan-ivoire',
+                'event_slug' => $currentEvent->event_slug ?? 'premium-bool',
+                'registrationId' => $registrationId
+            ]);
+            
+            // URL avec email pour détection automatique (alternative)
+            $registrationUrl = route('event.registration', [
+                'org_slug' => $currentOrganization->org_key ?? 'jci-abidjan-ivoire',
+                'event_slug' => $currentEvent->event_slug ?? 'premium-bool'
+            ]) . '?email=' . urlencode($registration->email);
+
+            $eventTitle = $currentEvent->event_title ?? 'Événement';
+            $orgName = $currentOrganization->org_name ?? 'Organisation';
+
+            Mail::send('emails.partial-payment', [
+                'registration' => $registration,
+                'event' => $currentEvent,
+                'organization' => $currentOrganization,
+                'balanceDue' => $balanceDue,
+                'amountPaid' => $registration->amount_paid,
+                'ticketPrice' => $registration->ticket_price,
+                'completionUrl' => $completionUrl,
+                'registrationUrl' => $registrationUrl,
+                'currency' => $registration->currency ?? 'XOF'
+            ], function ($message) use ($registration, $eventTitle, $orgName) {
+                $message->to($registration->email, $registration->fullname ?? 'Client')
+                        ->subject("⏳ Finalisez votre paiement - {$eventTitle}");
+            });
+
+            Log::info('Email de paiement partiel envoyé avec succès', [
+                'registration_id' => $registrationId,
+                'email' => $registration->email,
+                'balance_due' => $balanceDue
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erreur envoi email paiement partiel', [
+                'registration_id' => $registrationId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+        }
+    }
 
 // CORRECTION 4: Méthode pour générer et envoyer le ticket depuis une inscription
 private function generateAndSendTicketForRegistration($registrationId)

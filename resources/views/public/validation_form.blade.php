@@ -691,6 +691,11 @@ die; */
                     @endif
                 @endforeach
 
+                <!-- Code apporteur d'affaire depuis l'URL -->
+                @if(isset($referrerCode) && $referrerCode)
+                    <input type="hidden" name="referrer_code" value="{{ $referrerCode }}">
+                @endif
+
                 @php
                     // Extraire le code pays depuis les données de paiement avec debug
                     $phoneCountry = $paymentData['phone_country'] ?? $paymentData['phone_local'] ?? '+225';
@@ -1222,16 +1227,55 @@ die; */
             });
 
             function buildActionUrl(paymentMethod) {
-                const baseUrl = window.location.pathname.replace('/validation-paiement', '').replace('/paiement', '');
-
+                // Extraire org_slug et event_slug depuis l'URL actuelle
+                const pathSegments = window.location.pathname.split('/').filter(segment => segment);
+                
+                // Vérifier si le chemin contient 'czotick'
+                const hasCzotick = pathSegments.includes('czotick');
+                
+                // Trouver les indices de org_slug et event_slug
+                let orgIndex, eventIndex;
+                
+                if (hasCzotick) {
+                    // Format: /czotick/{org_slug}/{event_slug}/...
+                    const czotickIndex = pathSegments.indexOf('czotick');
+                    orgIndex = czotickIndex + 1;
+                    eventIndex = czotickIndex + 2;
+                } else {
+                    // Format: /{org_slug}/{event_slug}/...
+                    orgIndex = 0;
+                    eventIndex = 1;
+                }
+                
+                // Si on est sur /finaliser-paiement/{id}, on doit remonter
+                if (pathSegments.includes('finaliser-paiement')) {
+                    const finaliserIndex = pathSegments.indexOf('finaliser-paiement');
+                    if (hasCzotick) {
+                        orgIndex = finaliserIndex - 2;
+                        eventIndex = finaliserIndex - 1;
+                    } else {
+                        orgIndex = finaliserIndex - 2;
+                        eventIndex = finaliserIndex - 1;
+                    }
+                }
+                
+                const orgSlug = pathSegments[orgIndex] || '{{ $currentOrganization->org_key }}';
+                const eventSlug = pathSegments[eventIndex] || '{{ $currentEvent->event_slug }}';
+                
                 const methodPaths = {
                     'orange': '/validation-paiement/orange-money/process',
                     'mtn': '/validation-paiement/mtn-money/process',
                     'moov': '/validation-paiement/moov-money/process',
                     'wave': '/validation-paiement/wave-process'
                 };
-
-                return baseUrl + (methodPaths[paymentMethod] || methodPaths['wave']);
+                
+                // Construire l'URL correcte avec le préfixe czotick si nécessaire
+                const basePath = hasCzotick 
+                    ? '/czotick/' + orgSlug + '/' + eventSlug
+                    : '/' + orgSlug + '/' + eventSlug;
+                const actionUrl = basePath + (methodPaths[paymentMethod] || methodPaths['wave']);
+                
+                return window.location.origin + actionUrl;
             }
 
             function handleInitialSuccess(result, paymentMethod) {

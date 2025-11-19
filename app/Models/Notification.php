@@ -8,43 +8,35 @@ use Illuminate\Database\Eloquent\Model;
 class Notification extends Model
 {
     use HasFactory;
-    
-    protected $connection = 'mysql';
-    public $timestamps = false;
-    
+
+    protected $connection = 'tenant';
+
     protected $fillable = [
-        'organization_id',
         'user_id',
+        'referrer_id',
+        'type',
         'title',
         'message',
-        'type',
-        'send_email',
-        'send_sms',
-        'show_in_app',
+        'data',
         'is_read',
-        'sent_at',
         'read_at'
     ];
 
     protected $casts = [
-        'send_email' => 'boolean',
-        'send_sms' => 'boolean',
-        'show_in_app' => 'boolean',
+        'data' => 'array',
         'is_read' => 'boolean',
-        'sent_at' => 'datetime',
         'read_at' => 'datetime',
-        'created_at' => 'datetime'
     ];
 
     // Relations
-    public function organization()
-    {
-        return $this->belongsTo(Organization::class);
-    }
-
     public function user()
     {
-        return $this->belongsTo(SaasUser::class, 'user_id');
+        return $this->belongsTo(User::class);
+    }
+
+    public function referrer()
+    {
+        return $this->belongsTo(Referrer::class);
     }
 
     // Scopes
@@ -53,14 +45,19 @@ class Notification extends Model
         return $query->where('is_read', false);
     }
 
-    public function scopeByType($query, $type)
+    public function scopeRead($query)
     {
-        return $query->where('type', $type);
+        return $query->where('is_read', true);
     }
 
-    public function scopeForApp($query)
+    public function scopeForUser($query, $userId)
     {
-        return $query->where('show_in_app', true);
+        return $query->where('user_id', $userId);
+    }
+
+    public function scopeForReferrer($query, $referrerId)
+    {
+        return $query->where('referrer_id', $referrerId);
     }
 
     // Méthodes utilitaires
@@ -72,16 +69,26 @@ class Notification extends Model
         ]);
     }
 
-    public static function createForOrganization($organizationId, $title, $message, $type = 'info', $options = [])
+    // Factory methods
+    public static function createForReferrer($referrerId, $type, $title, $message, $data = [])
     {
-        return self::create(array_merge([
-            'organization_id' => $organizationId,
+        return self::create([
+            'referrer_id' => $referrerId,
+            'type' => $type,
             'title' => $title,
             'message' => $message,
+            'data' => $data
+        ]);
+    }
+
+    public static function createForUser($userId, $type, $title, $message, $data = [])
+    {
+        return self::create([
+            'user_id' => $userId,
             'type' => $type,
-            'send_email' => false,
-            'send_sms' => false,
-            'show_in_app' => true
-        ], $options));
+            'title' => $title,
+            'message' => $message,
+            'data' => $data
+        ]);
     }
 }

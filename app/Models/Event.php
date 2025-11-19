@@ -32,7 +32,8 @@ class Event extends Model
         'registration_end_date',
         'max_participants',
         'is_published',
-        'requires_approval'
+        'requires_approval',
+        'referrer_code'
     ];
 
     protected $casts = [
@@ -85,6 +86,21 @@ class Event extends Model
     public function emailTemplates()
     {
         return $this->hasMany(EmailTemplate::class);
+    }
+
+    public function referrer()
+    {
+        return $this->belongsTo(Referrer::class, 'referrer_code', 'referrer_code');
+    }
+
+    public function referrerCommissions()
+    {
+        return $this->hasMany(ReferrerCommission::class);
+    }
+
+    public function referrerRegistrations()
+    {
+        return $this->hasMany(ReferrerRegistration::class);
     }
 
     // Scopes

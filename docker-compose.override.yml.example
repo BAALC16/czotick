@@ -1,0 +1,30 @@
+# Fichier de configuration override pour le développement local
+# Copiez ce fichier vers docker-compose.override.yml pour personnaliser votre environnement
+
+version: '3.8'
+
+services:
+  app:
+    volumes:
+      - ./:/var/www/html
+      # Décommenter pour activer Xdebug
+      # - ./docker/php/xdebug.ini:/usr/local/etc/php/conf.d/xdebug.ini
+
+  nginx:
+    ports:
+      - "8080:80"
+    # Décommenter pour activer SSL
+    # - "8443:443"
+    # volumes:
+    #   - ./docker/nginx/ssl:/etc/nginx/ssl
+
+  mysql:
+    ports:
+      - "3307:3306"
+    environment:
+      # Personnaliser les variables d'environnement MySQL
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: czotick_master
+      MYSQL_USER: czotick_user
+      MYSQL_PASSWORD: root
+

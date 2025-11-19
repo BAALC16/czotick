@@ -219,10 +219,16 @@
                     </p>
                 </div>
                 <div class="flex gap-2 ml-4">
-                    <a href="{{ route('org.events.edit', ['org_slug' => $orgSlug, 'event' => $event->id]) }}"
-                       class="bg-white/20 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-white/30 transition border border-white/30">
-                        <i class="fas fa-edit mr-2"></i>Modifier
-                    </a>
+                    @if(isset($canEdit) && $canEdit)
+                        <a href="{{ route('org.collaborateurs.assign-commission', ['org_slug' => $orgSlug, 'eventId' => $event->id]) }}"
+                           class="bg-white/20 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-white/30 transition border border-white/30">
+                            <i class="fas fa-hand-holding-usd mr-2"></i>Attribuer commissions
+                        </a>
+                        <a href="{{ route('org.events.edit', ['org_slug' => $orgSlug, 'event' => $event->id]) }}"
+                           class="bg-white/20 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-white/30 transition border border-white/30">
+                            <i class="fas fa-edit mr-2"></i>Modifier
+                        </a>
+                    @endif
                     <a href="{{ route('org.events.index', ['org_slug' => $orgSlug]) }}"
                        class="bg-white/20 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-white/30 transition border border-white/30">
                         <i class="fas fa-arrow-left mr-2"></i>Retour

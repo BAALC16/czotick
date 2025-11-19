@@ -180,7 +180,6 @@ class TenantHelper
             // Utiliser la connexion mysql (base principale) pour récupérer l'organisation
             $organization = Organization::on('mysql')
                 ->where('org_key', $orgSlug)
-                ->where('subscription_status', 'active')
                 ->first();
 
             if ($organization) {
@@ -631,7 +630,7 @@ class TenantHelper
                 'name' => self::$currentOrganization->org_name,
                 'key' => self::$currentOrganization->org_key,
                 'database' => self::$currentOrganization->database_name,
-                'status' => self::$currentOrganization->subscription_status,
+                'status' => 'active', // Statut par défaut
             ] : null,
             'current_event' => self::$currentEvent ? [
                 'id' => self::$currentEvent->id,
