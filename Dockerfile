@@ -37,7 +37,7 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 RUN pecl install redis && docker-php-ext-enable redis
 
 # Copier les fichiers de configuration PHP
-COPY docker/php/php.ini /usr/local/etc/php/conf.d/custom.ini
+# Note: php.ini is mounted via docker-compose volume, so we only copy opcache.ini here
 COPY docker/php/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
 
 # Créer le répertoire pour les fichiers de session
