@@ -9,7 +9,7 @@ services:
         working_dir: /var/www/html
         volumes:
             - ./:/var/www/html
-            - ./docker/php/php.ini:/usr/local/etc/php/conf.d/custom.ini
+            - ./docker/php.ini:/usr/local/etc/php/conf.d/custom.ini
         networks:
             - czotick_network
         depends_on:
@@ -26,7 +26,7 @@ services:
             - "8443:443"
         volumes:
             - ./:/var/www/html
-            - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+            - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf
         networks:
             - czotick_network
         depends_on:
@@ -54,7 +54,7 @@ services:
             - czotick_network
         command: --default-authentication-plugin=mysql_native_password
 
-    # Service Redis (optionnel mais recommandé)
+    # Service Redis
     redis:
         image: redis:alpine
         container_name: czotick_redis
@@ -66,12 +66,11 @@ services:
             - redis_data:/data
         networks:
             - czotick_network
-        # Si REDIS_PASSWORD est défini dans .env, il sera utilisé
         command: >
             sh -c "redis-server --appendonly yes
             ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}"
 
-    # Service pour les tâches artisan (optionnel)
+    # Service pour les tâches artisan (queue)
     queue:
         build:
             context: .

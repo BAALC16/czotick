@@ -37,7 +37,7 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 RUN pecl install redis && docker-php-ext-enable redis
 
 # Copier les fichiers de configuration PHP
-# Note: php.ini is mounted via docker-compose volume, so we only copy opcache.ini here
+# Note: php.ini est monté via docker-compose volume, donc on ne copie que opcache.ini
 COPY docker/php/opcache.ini /usr/local/etc/php/conf.d/opcache.ini
 
 # Créer le répertoire pour les fichiers de session
@@ -55,10 +55,6 @@ RUN chown -R www-data:www-data /var/www/html \
     && chmod -R 755 /var/www/html \
     && chmod -R 775 /var/www/html/storage \
     && chmod -R 775 /var/www/html/bootstrap/cache
-
-# Copier le script de démarrage
-COPY docker/start.sh /usr/local/bin/start.sh
-RUN chmod +x /usr/local/bin/start.sh
 
 # Exposer le port 9000 pour PHP-FPM
 EXPOSE 9000
